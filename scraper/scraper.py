@@ -3,10 +3,10 @@ from bs4 import BeautifulSoup
 import time
 import undetected_chromedriver as uc
 
+
 def setup_driver():
     try:
         options = uc.ChromeOptions()
-        options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
         options.add_argument('--disable-gpu')
@@ -16,6 +16,7 @@ def setup_driver():
         print(f"Erro ao iniciar driver {e}")
         return None
 
+
 def scrape_metacritic(url, driver):
     try:
         driver.get(url)
@@ -24,42 +25,78 @@ def scrape_metacritic(url, driver):
             accept_button[0].click()
         except:
             pass
-        time.sleep(5)
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
-        time.sleep(3)
+
+        time.sleep(8)
+        for _ in range(5):
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(2)
         driver.execute_script("window.scrollTo(0, 0)")
-        time.sleep(2)
+        time.sleep(3)
+
         html = driver.page_source
+        with open('debug_metacritic.html', 'w', encoding='utf-8') as f:
+            f.write(html)
         soup = BeautifulSoup(html, 'html.parser')
         return soup
+
     except Exception as e:
         print(f"Erro ao tentar abrir o site {e}")
+
 
 def extrair_jogos(soup, platform):
     try:
         games = []
-        links = soup.find_all('a', href=lambda h: h and h.startswith('/game/') and h.count('/') >= 3)
-        for link in links:
-            nome = link.find('h3')
-            if nome:
-                nome = nome.get_text(strip=True)
+
+        cards = soup.find_all('div', attrs={'data-testid': 'browse-product-card'})
+
+        if not cards:
+            main = soup.find('main') or soup.find('div', attrs={'id': 'main_content'})
+            if main:
+                cards = main.find_all('a', href=lambda h: h and h.startswith('/game/') and h.count('/') >= 3)
+            else:
+                cards = []
+
+        for card in cards:
+            if card.name == 'div':
+                link = card.find('a', href=lambda h: h and h.startswith('/game/'))
+            else:
+                link = card
+
+            if not link:
+                continue
+
+            href = link.get('href', '')
+
+            parts = href.strip('/').split('/')
+            if len(parts) < 2:
+                continue
+
+            nome_tag = link.find(['h3', 'h2']) or card.find(['h3', 'h2'])
+            if nome_tag:
+                nome = nome_tag.get_text(strip=True)
             else:
                 nome = link.get_text(strip=True).split('\n')[0].strip()
-            href = link.get('href')
-            if nome and href:
+
+            if nome and href and len(nome) > 1:
                 jogo = {
                     'nome': nome,
                     'link': f'https://www.metacritic.com{href}',
                     'tipo': 'jogo'
                 }
-                games.append(jogo)
+                if not any(j['link'] == jogo['link'] for j in games):
+                    games.append(jogo)
+
+            if len(games) >= 50:
+                break
+
         return games
     except Exception as e:
         print(f"erro ao buscar o jogo: {e}")
         return []
 
+
 if __name__ == '__main__':
-    url = 'https://www.metacritic.com/browse/games/'
+    url = 'https://www.metacritic.com/browse/game/'
     print("Iniciando...")
     driver = setup_driver()
     if driver is None:
