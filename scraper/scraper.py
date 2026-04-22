@@ -8,7 +8,7 @@ def setup_driver():
 
     try:
         options = uc.ChromeOptions() # configurações do navegador
-        options.add_argument('--headless=new') # roda sem interface visual (versão nova, menos detectável)
+        #options.add_argument('--headless=new') # roda sem interface visual (versão nova, menos detectável)
         options.add_argument('--no-sandbox') # necessário para rodar como root
         options.add_argument('--disable-dev-shm-usage') # evita erros de memória no Docker
         options.add_argument('--disable-gpu') # desativa GPU, necessário em ambientes sem interface gráfica
@@ -18,7 +18,7 @@ def setup_driver():
     except Exception as e:
         print(f"Erro ao iniciar driver {e}")
         return None
-    
+
 def scrape_metacritic(url, driver):
 
     try:
@@ -31,13 +31,16 @@ def scrape_metacritic(url, driver):
         except:
             pass # se não achar o botão, ignora e continua
 
-        time.sleep(5) # espera a página carregar
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight)") # rola até o fim para carregar jogos lazy-loaded
-        time.sleep(3)
+        time.sleep(8) # espera a página carregar
+        for _ in range(5):
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(2)
         driver.execute_script("window.scrollTo(0, 0)") # volta ao topo
-        time.sleep(2)
+        time.sleep(3)
 
         html = driver.page_source # pega o html completo da página
+        with open('debug_metacritic.html', 'w', encoding='utf-8') as f:
+            f.write(html)
         soup = BeautifulSoup(html, 'html.parser') # transforma o html em objeto navegável
         return soup 
 
@@ -49,38 +52,62 @@ def extrair_jogos(soup, platform):
     try:
         games = []
 
-        # acha todos os links que apontam para páginas de jogos específicos
-        # h.startswith('/game/') → só links de jogos, não de navegação
-        # h.count('/') >= 3 → filtra links genéricos como /game/ (precisam ter /game/nome/plataforma/)
-        links = soup.find_all('a', href=lambda h: h and h.startswith('/game/') and h.count('/') >= 3)
-        
-        for link in links:
-            # tenta pegar o nome pelo h3, que é o título limpo
-            # se não tiver h3, pega a primeira linha do texto do link
-            nome = link.find('h3')
-            if nome:
-                nome = nome.get_text(strip=True)
+        # busca pelo container principal da lista de jogos
+        # O Metacritic usa um elemento com data-testid nos cards
+        cards = soup.find_all('div', attrs={'data-testid': 'browse-product-card'})
+
+        #  busca pela section/main content, ignora nav/header/footer
+        if not cards:
+            main = soup.find('main') or soup.find('div', attrs={'id': 'main_content'})
+            if main:
+                cards = main.find_all('a', href=lambda h: h and h.startswith('/game/') and h.count('/') >= 3)
+            else:
+                cards = []
+
+        for card in cards:
+            # Se veio da estratégia 1 (div card), pega o link dentro dele
+            if card.name == 'div':
+                link = card.find('a', href=lambda h: h and h.startswith('/game/'))
+            else:
+                link = card  # já é o <a> da estratégia 2
+
+            if not link:
+                continue
+
+            href = link.get('href', '')
+
+            # Ignora links que são só /game/ sem slug (links de nav genéricos)
+            parts = href.strip('/').split('/')
+            if len(parts) < 2:
+                continue
+
+            # Pega o nome: tenta h3, depois h2, depois texto do link
+            nome_tag = link.find(['h3', 'h2']) or card.find(['h3', 'h2'])
+            if nome_tag:
+                nome = nome_tag.get_text(strip=True)
             else:
                 nome = link.get_text(strip=True).split('\n')[0].strip()
 
-            href = link.get('href') # pega o caminho do link ex: /game/zelda/
-            
-            if nome and href:
+            if nome and href and len(nome) > 1:
                 jogo = {
                     'nome': nome,
-                    'link': f'https://www.metacritic.com{href}', # monta a url completa
+                    'link': f'https://www.metacritic.com{href}',
                     'tipo': 'jogo'
                 }
-                games.append(jogo)
-        
-        return games
+                # Evita duplicatas
+                if not any(j['link'] == jogo['link'] for j in games):
+                    games.append(jogo)
 
+            if len(games) >= 50:
+                break
+
+        return games
     except Exception as e:
         print(f"erro ao buscar o jogo: {e}")
         return []
 
 if __name__ == '__main__':
-    url = 'https://www.metacritic.com/browse/games/'
+    url = 'https://www.metacritic.com/browse/game/'
     print("Iniciando...")
     driver = setup_driver()
     if driver is None:
