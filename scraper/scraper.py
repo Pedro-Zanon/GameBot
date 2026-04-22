@@ -1,80 +1,59 @@
-from selenium.webdriver.common.by import By #localiza elementos (css, xpath, etc)
-from bs4 import BeautifulSoup # parseia o HTML
-import time 
-import undetected_chromedriver as uc # versão do chrome que evita detecção de bot
-
+from selenium.webdriver.common.by import By
+from bs4 import BeautifulSoup
+import time
+import undetected_chromedriver as uc
 
 def setup_driver():
-
     try:
-        options = uc.ChromeOptions() # configurações do navegador
-        options.add_argument('--headless=new') # roda sem interface visual (versão nova, menos detectável)
-        options.add_argument('--no-sandbox') # necessário para rodar como root
-        options.add_argument('--disable-dev-shm-usage') # evita erros de memória no Docker
-        options.add_argument('--disable-gpu') # desativa GPU, necessário em ambientes sem interface gráfica
-        driver = uc.Chrome(options=options, version_main=None) # inicia o chrome com as configurações
+        options = uc.ChromeOptions()
+        options.add_argument('--headless=new')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('--disable-gpu')
+        driver = uc.Chrome(options=options, version_main=None)
         return driver
-    
     except Exception as e:
         print(f"Erro ao iniciar driver {e}")
         return None
-    
+
 def scrape_metacritic(url, driver):
-
     try:
-        driver.get(url) # abre a url no navegador
-
+        driver.get(url)
         try:
-            # tenta achar e clicar no botão de aceitar cookies
             accept_button = driver.find_elements(By.XPATH, "//button[text()='I Accept']")
             accept_button[0].click()
         except:
-            pass # se não achar o botão, ignora e continua
-
-        time.sleep(5) # espera a página carregar
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight)") # rola até o fim para carregar jogos lazy-loaded
+            pass
+        time.sleep(5)
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
         time.sleep(3)
-        driver.execute_script("window.scrollTo(0, 0)") # volta ao topo
+        driver.execute_script("window.scrollTo(0, 0)")
         time.sleep(2)
-
-        html = driver.page_source # pega o html completo da página
-        soup = BeautifulSoup(html, 'html.parser') # transforma o html em objeto navegável
-        return soup 
-
-    except Exception as e: 
+        html = driver.page_source
+        soup = BeautifulSoup(html, 'html.parser')
+        return soup
+    except Exception as e:
         print(f"Erro ao tentar abrir o site {e}")
-
 
 def extrair_jogos(soup, platform):
     try:
         games = []
-
-        # acha todos os links que apontam para páginas de jogos específicos
-        # h.startswith('/game/') → só links de jogos, não de navegação
-        # h.count('/') >= 3 → filtra links genéricos como /game/ (precisam ter /game/nome/plataforma/)
         links = soup.find_all('a', href=lambda h: h and h.startswith('/game/') and h.count('/') >= 3)
-        
         for link in links:
-            # tenta pegar o nome pelo h3, que é o título limpo
-            # se não tiver h3, pega a primeira linha do texto do link
             nome = link.find('h3')
             if nome:
                 nome = nome.get_text(strip=True)
             else:
                 nome = link.get_text(strip=True).split('\n')[0].strip()
-
-            href = link.get('href') # pega o caminho do link ex: /game/zelda/
-            
+            href = link.get('href')
             if nome and href:
                 jogo = {
                     'nome': nome,
-                    'link': f'https://www.metacritic.com{href}', # monta a url completa
+                    'link': f'https://www.metacritic.com{href}',
                     'tipo': 'jogo'
                 }
                 games.append(jogo)
-        
         return games
-
     except Exception as e:
         print(f"erro ao buscar o jogo: {e}")
         return []
