@@ -1,127 +1,110 @@
-from selenium.webdriver.common.by import By #localiza elementos (css, xpath, etc)
-from bs4 import BeautifulSoup # parseia o HTML
-import time 
-import undetected_chromedriver as uc # versão do chrome que evita detecção de bot
+# Selenium: usado para controlar o navegador de forma programática
+# By: define como localizar elementos (xpath, css, id, etc)
+from selenium.webdriver.common.by import By
+# WebDriverWait: espera um elemento aparecer antes de interagir
+from selenium.webdriver.support.ui import WebDriverWait
+# expected_conditions: define a condição de espera (ex: elemento clicável)
+from selenium.webdriver.support import expected_conditions as EC
+# BeautifulSoup: parseia o HTML retornado pelo Selenium de forma mais simples
+from bs4 import BeautifulSoup
+# time: usado para pausas manuais enquanto a página carrega
+import time
+# undetected_chromedriver: versão do Chrome que evita detecção de bot pelo site
+import undetected_chromedriver as uc
 
 
 def setup_driver():
-
+    # inicializa o navegador com as configurações necessárias
     try:
-        options = uc.ChromeOptions() # configurações do navegador
-        #options.add_argument('--headless=new') # roda sem interface visual (versão nova, menos detectável)
-        options.add_argument('--no-sandbox') # necessário para rodar como root
+        options = uc.ChromeOptions()
+        options.add_argument('--no-sandbox')         # necessário para rodar como root
         options.add_argument('--disable-dev-shm-usage') # evita erros de memória no Docker
-        options.add_argument('--disable-gpu') # desativa GPU, necessário em ambientes sem interface gráfica
-        driver = uc.Chrome(options=options, version_main=None) # inicia o chrome com as configurações
+        options.add_argument('--disable-gpu')        # desativa GPU, necessário sem interface gráfica
+        # version_main=None: detecta automaticamente a versão do Chrome instalado
+        driver = uc.Chrome(options=options, version_main=None)
         return driver
-    
     except Exception as e:
         print(f"Erro ao iniciar driver {e}")
         return None
 
-def scrape_metacritic(url, driver):
 
+def aceitar_cookies(driver):
+    # separada em função própria para poder ser reutilizada em diferentes momentos da navegação
     try:
-        driver.get(url) # abre a url no navegador
+        # tenta vários textos possíveis pois o botão pode variar dependendo do idioma ou versão do site
+        for texto in ["I Accept", "Accept", "Accept All", "Aceitar"]:
+            botoes = driver.find_elements(By.XPATH, f"//button[text()='{texto}']")
+            if botoes:
+                botoes[0].click()
+                time.sleep(1) # pequena pausa para o modal fechar antes de continuar
+                return
+    except:
+        pass # se não encontrar o botão, ignora e segue normalmente
 
-        try:
-            # tenta achar e clicar no botão de aceitar cookies
-            accept_button = driver.find_elements(By.XPATH, "//button[text()='I Accept']")
-            accept_button[0].click()
-        except:
-            pass # se não achar o botão, ignora e continua
 
-        time.sleep(8) # espera a página carregar
-        for _ in range(5):
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(2)
-        driver.execute_script("window.scrollTo(0, 0)") # volta ao topo
-        time.sleep(3)
+def formatar_slug(nome):
+    # o Metacritic usa slugs no formato "portal-2" na URL
+    # strip() remove espaços nas bordas, lower() deixa minúsculo, replace() troca espaços por hífen
+    return nome.strip().lower().replace(' ', '-')
 
-        html = driver.page_source # pega o html completo da página
-        with open('debug_metacritic.html', 'w', encoding='utf-8') as f:
+
+def extrair_jogo(nome_jogo, driver):
+    try:
+        slug = formatar_slug(nome_jogo)
+        # monta a URL diretamente em vez de navegar pela busca
+        # isso é mais rápido e evita problemas de clicar no elemento certo nos resultados
+        url = f'https://www.metacritic.com/game/{slug}/'
+
+        driver.get(url)
+        time.sleep(6) # aguarda o carregamento inicial da página e do JavaScript
+
+        aceitar_cookies(driver)
+        time.sleep(3) # aguarda o modal de cookie fechar completamente
+
+        # salva o HTML para facilitar debug caso o seletor não funcione
+        html = driver.page_source
+        with open('debug.html', 'w', encoding='utf-8') as f:
             f.write(html)
-        soup = BeautifulSoup(html, 'html.parser') # transforma o html em objeto navegável
-        return soup 
 
-    except Exception as e: 
-        print(f"Erro ao tentar abrir o site {e}")
+        # BeautifulSoup é usado aqui pois é mais simples para navegar no HTML estático
+        # após o Selenium já ter carregado o JavaScript
+        soup = BeautifulSoup(html, 'html.parser')
 
+        # pega o nome oficial do jogo direto do H1 da página
+        try:
+            nome = soup.find('h1').get_text(strip=True)
+        except:
+            nome = nome_jogo # fallback para o nome digitado caso o H1 não seja encontrado
 
-def extrair_jogos(soup, platform):
-    try:
-        games = []
+        # busca o metascore pelo data-testid que é mais estável que classes CSS
+        # classes CSS podem mudar com atualizações do site, data-testid tende a ser mais permanente
+        nota = "N/A"
+        try:
+            elemento = soup.find('span', attrs={'data-testid': 'global-score-value'})
+            if elemento:
+                nota = elemento.get_text(strip=True)
+        except:
+            pass
 
-        # busca pelo container principal da lista de jogos
-        # O Metacritic usa um elemento com data-testid nos cards
-        cards = soup.find_all('div', attrs={'data-testid': 'browse-product-card'})
+        print(f"\n=== Resultado ===")
+        print(f"Jogo:  {nome}")
+        print(f"Metascore: {nota}")
 
-        #  busca pela section/main content, ignora nav/header/footer
-        if not cards:
-            main = soup.find('main') or soup.find('div', attrs={'id': 'main_content'})
-            if main:
-                cards = main.find_all('a', href=lambda h: h and h.startswith('/game/') and h.count('/') >= 3)
-            else:
-                cards = []
+        # retorna dicionário para facilitar o uso dos dados em outras partes do código no futuro
+        return {'nome': nome, 'nota': nota}
 
-        for card in cards:
-            # Se veio da estratégia 1 (div card), pega o link dentro dele
-            if card.name == 'div':
-                link = card.find('a', href=lambda h: h and h.startswith('/game/'))
-            else:
-                link = card  # já é o <a> da estratégia 2
-
-            if not link:
-                continue
-
-            href = link.get('href', '')
-
-            # Ignora links que são só /game/ sem slug (links de nav genéricos)
-            parts = href.strip('/').split('/')
-            if len(parts) < 2:
-                continue
-
-            # Pega o nome: tenta h3, depois h2, depois texto do link
-            nome_tag = link.find(['h3', 'h2']) or card.find(['h3', 'h2'])
-            if nome_tag:
-                nome = nome_tag.get_text(strip=True)
-            else:
-                nome = link.get_text(strip=True).split('\n')[0].strip()
-
-            if nome and href and len(nome) > 1:
-                jogo = {
-                    'nome': nome,
-                    'link': f'https://www.metacritic.com{href}',
-                    'tipo': 'jogo'
-                }
-                # Evita duplicatas
-                if not any(j['link'] == jogo['link'] for j in games):
-                    games.append(jogo)
-
-            if len(games) >= 50:
-                break
-
-        return games
     except Exception as e:
-        print(f"erro ao buscar o jogo: {e}")
-        return []
+        print(f"Erro geral: {e}")
+        return None
+
 
 if __name__ == '__main__':
-    url = 'https://www.metacritic.com/browse/game/'
+    jogo = input("Digite o nome do jogo: ")
     print("Iniciando...")
     driver = setup_driver()
     if driver is None:
-        print("Driver falhou, sai do programa")
+        print("Driver falhou")
         exit(1)
     print("Driver iniciado")
-    soup = scrape_metacritic(url, driver)
-    if soup is None:
-        print("Scraping falhou")
-        driver.quit()
-        exit(1)
-    print("Página carregada")
-    jogos = extrair_jogos(soup, 'general')
-    print(f"Encontrados {len(jogos)} jogos")
-    for jogo in jogos[:10]:
-        print(f"- {jogo['nome']}")
-    driver.quit()
+    extrair_jogo(jogo, driver)
+    driver.quit() # encerra o navegador ao final para liberar memória
