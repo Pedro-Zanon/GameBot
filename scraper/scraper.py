@@ -1,4 +1,6 @@
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from bs4 import BeautifulSoup
 import time
 import undetected_chromedriver as uc
@@ -17,100 +19,75 @@ def setup_driver():
         return None
 
 
-def scrape_metacritic(url, driver):
+def aceitar_cookies(driver):
     try:
+        # tenta vários textos possíveis do botão
+        for texto in ["I Accept", "Accept", "Accept All", "Aceitar"]:
+            botoes = driver.find_elements(By.XPATH, f"//button[text()='{texto}']")
+            if botoes:
+                botoes[0].click()
+                #print("Cookie aceito")
+                time.sleep(1)
+                return
+    except:
+        pass
+
+
+def formatar_slug(nome):
+    return nome.strip().lower().replace(' ', '-')
+
+
+def extrair_jogo(nome_jogo, driver):
+    try:
+        slug = formatar_slug(nome_jogo)
+        url = f'https://www.metacritic.com/game/{slug}/'
+        #print(f"Acessando: {url}")
+
         driver.get(url)
+        time.sleep(6)
+        aceitar_cookies(driver)
+        time.sleep(3)
+
+        # salva HTML para debug
+        html = driver.page_source
+        with open('debug.html', 'w', encoding='utf-8') as f:
+            f.write(html)
+
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # nome
         try:
-            accept_button = driver.find_elements(By.XPATH, "//button[text()='I Accept']")
-            accept_button[0].click()
+            nome = soup.find('h1').get_text(strip=True)
+        except:
+            nome = nome_jogo
+
+        # metascore — busca pelo label "METASCORE" e pega o número próximo
+        nota = "N/A"
+        try:
+            elemento = soup.find('span', attrs={'data-testid': 'global-score-value'})
+            if elemento:
+                nota = elemento.get_text(strip=True)
         except:
             pass
 
-        time.sleep(8)
-        for _ in range(5):
-            driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(2)
-        driver.execute_script("window.scrollTo(0, 0)")
-        time.sleep(3)
+        print(f"\n=== Resultado ===")
+        print(f"Jogo:  {nome}")
+        print(f"Metascore: {nota}")
 
-        html = driver.page_source
-        with open('debug_metacritic.html', 'w', encoding='utf-8') as f:
-            f.write(html)
-        soup = BeautifulSoup(html, 'html.parser')
-        return soup
+        return {'nome': nome, 'nota': nota}
 
     except Exception as e:
-        print(f"Erro ao tentar abrir o site {e}")
-
-
-def extrair_jogos(soup, platform):
-    try:
-        games = []
-
-        cards = soup.find_all('div', attrs={'data-testid': 'browse-product-card'})
-
-        if not cards:
-            main = soup.find('main') or soup.find('div', attrs={'id': 'main_content'})
-            if main:
-                cards = main.find_all('a', href=lambda h: h and h.startswith('/game/') and h.count('/') >= 3)
-            else:
-                cards = []
-
-        for card in cards:
-            if card.name == 'div':
-                link = card.find('a', href=lambda h: h and h.startswith('/game/'))
-            else:
-                link = card
-
-            if not link:
-                continue
-
-            href = link.get('href', '')
-
-            parts = href.strip('/').split('/')
-            if len(parts) < 2:
-                continue
-
-            nome_tag = link.find(['h3', 'h2']) or card.find(['h3', 'h2'])
-            if nome_tag:
-                nome = nome_tag.get_text(strip=True)
-            else:
-                nome = link.get_text(strip=True).split('\n')[0].strip()
-
-            if nome and href and len(nome) > 1:
-                jogo = {
-                    'nome': nome,
-                    'link': f'https://www.metacritic.com{href}',
-                    'tipo': 'jogo'
-                }
-                if not any(j['link'] == jogo['link'] for j in games):
-                    games.append(jogo)
-
-            if len(games) >= 50:
-                break
-
-        return games
-    except Exception as e:
-        print(f"erro ao buscar o jogo: {e}")
-        return []
+        print(f"Erro geral: {e}")
+        return None
 
 
 if __name__ == '__main__':
-    url = 'https://www.metacritic.com/browse/game/'
+    jogo = input("Digite o nome do jogo: ")
     print("Iniciando...")
     driver = setup_driver()
     if driver is None:
-        print("Driver falhou, sai do programa")
+        print("Driver falhou")
         exit(1)
     print("Driver iniciado")
-    soup = scrape_metacritic(url, driver)
-    if soup is None:
-        print("Scraping falhou")
-        driver.quit()
-        exit(1)
-    print("Página carregada")
-    jogos = extrair_jogos(soup, 'general')
-    print(f"Encontrados {len(jogos)} jogos")
-    for jogo in jogos[:10]:
-        print(f"- {jogo['nome']}")
+    extrair_jogo(jogo, driver)
     driver.quit()
